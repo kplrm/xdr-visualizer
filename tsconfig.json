@@ -1,0 +1,21 @@
+{
+  "extends": "../OpenSearch-Dashboards/tsconfig.json",
+  "include": [
+    "index.ts",
+    "common/**/*.ts",
+    "public/**/*.ts",
+    "public/**/*.tsx",
+    "server/**/*.ts",
+    "../OpenSearch-Dashboards/typings/**/*"
+  ],
+  "exclude": ["node_modules", "*/node_modules/"],
+  "compilerOptions": {
+    "outDir": "./target",
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "typeRoots": [
+      "../OpenSearch-Dashboards/node_modules/@types",
+      "node_modules/@types"
+    ]
+  }
+}
