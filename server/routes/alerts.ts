@@ -1,6 +1,7 @@
 declare const require: any;
 
 import {
+  AlertEventDetailsResponse,
   AlertEventGraphResponse,
   AlertsSummaryResponse,
   EventGraphEdge,
@@ -197,7 +198,8 @@ function eventToNode(source: any, fallbackId: string): EventGraphNode {
   const processParentEntityId = safeString(payloadField(source, 'process.parent.entity_id'));
   const processName = safeString(payloadField(source, 'process.name'));
   const processCommandLine = safeString(payloadField(source, 'process.command_line'));
-  const filePath = safeString(payloadField(source, 'file.path', 'process.executable'));
+  // Only treat true file/library paths as artifacts; process executable is process metadata.
+  const filePath = safeString(payloadField(source, 'file.path', 'dll.path'));
   let kind: EventGraphNode['kind'] = 'event';
   if (eventKind === 'alert') {
     kind = 'alert';
@@ -220,6 +222,7 @@ function eventToNode(source: any, fallbackId: string): EventGraphNode {
       id
     ),
     kind,
+    sourceEventId: id,
     module: safeString(sourceField(source, 'event.module', 'module')) || undefined,
     type: safeString(sourceField(source, 'event.type')) || undefined,
     host: safeString(sourceField(source, 'host.hostname')) || undefined,
@@ -308,13 +311,14 @@ function buildLineage(source: any, sourceNodeId: string): { nodes: EventGraphNod
       timestamp: safeString(sourceField(source, '@timestamp')) || undefined,
       label: safeString(readPath(ancestor, 'name') || readPath(ancestor, 'executable') || entityId, entityId),
       kind: 'process',
+      sourceEventId: undefined,
       module: 'process.lineage',
       type: 'ancestor',
       host: safeString(sourceField(source, 'host.hostname')) || undefined,
       processEntityId: entityId,
       processName: safeString(readPath(ancestor, 'name')) || undefined,
       processCommandLine: safeString(readPath(ancestor, 'command_line')) || undefined,
-      filePath: safeString(readPath(ancestor, 'executable')) || undefined,
+      filePath: undefined,
     });
     edges.push({
       id: `parent-${nodeId}-${childId}`,
@@ -332,15 +336,20 @@ function buildFileArtifacts(nodes: EventGraphNode[]): { nodes: EventGraphNode[];
   const createdNodes: EventGraphNode[] = [];
   const edges: EventGraphEdge[] = [];
   const fileNodeByPath = new Map<string, string>();
+  const processNodeByEntityId = new Map<string, EventGraphNode>();
 
   for (const node of nodes) {
+    if (node.kind === 'process' && node.processEntityId && !processNodeByEntityId.has(node.processEntityId)) {
+      processNodeByEntityId.set(node.processEntityId, node);
+    }
     if (node.kind === 'file' && node.filePath) {
       fileNodeByPath.set(node.filePath, node.id);
     }
   }
 
   for (const node of nodes) {
-    if (!node.filePath) {
+    // Only file-bearing event/file nodes create file artifacts.
+    if (!node.filePath || (node.kind !== 'event' && node.kind !== 'file')) {
       continue;
     }
 
@@ -360,10 +369,13 @@ function buildFileArtifacts(nodes: EventGraphNode[]): { nodes: EventGraphNode[];
       });
     }
 
-    if (fileNodeId !== node.id) {
+    const owningProcessNode = node.processEntityId ? processNodeByEntityId.get(node.processEntityId) : undefined;
+    const fromNodeId = owningProcessNode?.id || node.id;
+
+    if (fileNodeId !== fromNodeId) {
       edges.push({
-        id: `touch-${node.id}-${fileNodeId}`,
-        from: node.id,
+        id: `touch-${fromNodeId}-${fileNodeId}`,
+        from: fromNodeId,
         to: fileNodeId,
         relation: 'touches',
       });
@@ -637,6 +649,98 @@ export function registerAlertRoutes(router: any): void {
           edges,
         };
 
+        return res.ok({ body });
+      } catch (err: any) {
+        return res.customError({
+          statusCode: 500,
+          body: { message: String(err?.message ?? err) },
+        });
+      }
+    }
+  );
+
+  router.get(
+    {
+      path: '/api/xdr-visualizer/alerts/event',
+      validate: {
+        query: schema.object({
+          event_id: schema.maybe(schema.string({ minLength: 1, maxLength: 2048 })),
+          process_entity_id: schema.maybe(schema.string({ minLength: 1, maxLength: 2048 })),
+          hours: schema.maybe(schema.number({ min: 1, max: 168 })),
+          from: schema.maybe(schema.string({ minLength: 1, maxLength: 128 })),
+          to: schema.maybe(schema.string({ minLength: 1, maxLength: 128 })),
+        }),
+      },
+    },
+    async (ctx: any, req: any, res: any) => {
+      try {
+        const client = scopedClient(ctx);
+        if (!client) {
+          return res.customError({
+            statusCode: 503,
+            body: { message: 'OpenSearch client unavailable.' },
+          });
+        }
+
+        const eventId = req.query?.event_id ? String(req.query.event_id) : '';
+        const processEntityId = req.query?.process_entity_id ? String(req.query.process_entity_id) : '';
+        const hours = Number(req.query.hours ?? 24);
+        const from = req.query?.from ? String(req.query.from) : undefined;
+        const to = req.query?.to ? String(req.query.to) : undefined;
+
+        if (!eventId && !processEntityId) {
+          return res.customError({
+            statusCode: 400,
+            body: { message: 'Either event_id or process_entity_id is required.' },
+          });
+        }
+
+        const should: any[] = [];
+        if (eventId) {
+          should.push({ term: { 'id.keyword': eventId } }, { term: { id: eventId } }, { term: { _id: eventId } });
+        }
+        if (processEntityId) {
+          should.push(
+            { term: { 'payload.process.entity_id.keyword': processEntityId } },
+            { term: { 'payload.process.entity_id': processEntityId } },
+            { term: { 'payload.process.parent.entity_id.keyword': processEntityId } },
+            { term: { 'payload.process.parent.entity_id': processEntityId } },
+            { term: { 'payload.process.ancestors.entity_id.keyword': processEntityId } },
+            { term: { 'payload.process.ancestors.entity_id': processEntityId } },
+            { term: { 'payload.process.group_leader.entity_id.keyword': processEntityId } },
+            { term: { 'payload.process.group_leader.entity_id': processEntityId } },
+            { term: { 'process.entity_id.keyword': processEntityId } },
+            { term: { 'process.entity_id': processEntityId } }
+          );
+        }
+
+        const detailResult = await client.search({
+          index: `${SECURITY_INDEX},${TELEMETRY_INDEX}`,
+          allow_no_indices: true,
+          ignore_unavailable: true,
+          body: {
+            size: 1,
+            sort: [{ '@timestamp': { order: 'desc' } }],
+            query: {
+              bool: {
+                filter: [{ range: { '@timestamp': { gte: from || `now-${hours}h`, lte: to || 'now' } } }],
+                should,
+                minimum_should_match: 1,
+              },
+            },
+          },
+        });
+
+        const hit = Array.isArray(detailResult?.body?.hits?.hits) ? detailResult.body.hits.hits[0] : undefined;
+        if (!hit) {
+          const identifier = eventId || processEntityId;
+          return res.customError({ statusCode: 404, body: { message: `Event not found: ${identifier}` } });
+        }
+
+        const body: AlertEventDetailsResponse = {
+          eventId: safeString(normalizeSource(hit)?.id, eventId || processEntityId),
+          source: normalizeSource(hit),
+        };
         return res.ok({ body });
       } catch (err: any) {
         return res.customError({

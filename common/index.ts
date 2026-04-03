@@ -42,6 +42,7 @@ export interface EventGraphNode {
   timestamp?: string;
   label: string;
   kind: 'alert' | 'event' | 'process' | 'file';
+  sourceEventId?: string;
   module?: string;
   type?: string;
   host?: string;
@@ -63,4 +64,9 @@ export interface AlertEventGraphResponse {
   alertId: string;
   nodes: EventGraphNode[];
   edges: EventGraphEdge[];
+}
+
+export interface AlertEventDetailsResponse {
+  eventId: string;
+  source: Record<string, any>;
 }
