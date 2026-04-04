@@ -8,6 +8,7 @@ import {
   EuiCallOut,
   EuiCodeBlock,
   EuiComboBox,
+  EuiFieldSearch,
   EuiFlexGroup,
   EuiFlexItem,
   EuiFlyout,
@@ -20,6 +21,8 @@ import {
   EuiPanel,
   EuiSpacer,
   EuiSuperDatePicker,
+  EuiTab,
+  EuiTabs,
   EuiText,
   EuiTitle,
   EuiToolTip,
@@ -88,13 +91,14 @@ const donutBackground = (summary: AlertsSummaryResponse | null): string => {
 
 // NODE_W / NODE_H: size of a process/alert node box in the SVG
 const NODE_W = 200;
-const NODE_H = 84;
+const NODE_H = 120;
 // Horizontal gap between depth levels, vertical gap between siblings
 const LEVEL_GAP = 280;
 const BASE_ROW_GAP = 110;
-const ALERT_ROW_EXTRA = 34;
 const CANVAS_PAD_X = 60;
 const CANVAS_PAD_Y = 64;
+const ALERT_NODE_H = 22;
+const ALERT_NODE_GAP = 10;
 
 function fmtTimeDelta(fromTs: string | undefined, toTs: string | undefined): string {
   if (!fromTs || !toTs) {
@@ -123,6 +127,8 @@ interface ProcessTreeLayout {
   artifactsByProcess: Map<string, EventGraphNode[]>;
   // alert nodes grouped by the process node id they are attached to
   alertsByProcess: Map<string, EventGraphNode[]>;
+  // fixed position for each alert box
+  alertPositions: Map<string, { x: number; y: number }>;
   // only parent_of edges between tree-nodes
   treeEdges: Array<{ edge: EventGraphEdge; fromNode: EventGraphNode; toNode: EventGraphNode }>;
   positions: Map<string, { x: number; y: number }>;
@@ -162,11 +168,11 @@ function buildProcessTree(
   for (const edge of edges) {
     if (edge.relation === 'touches') {
       const procNode = nodeById.get(edge.from);
-      const fileNode = nodeById.get(edge.to);
-      if (procNode && fileNode && fileNode.kind === 'file') {
+      const artifactNode = nodeById.get(edge.to);
+      if (procNode && artifactNode && artifactNode.kind === 'artifact') {
         const arr = artifactsByProcess.get(procNode.id) ?? [];
-        if (!arr.find((f) => f.id === fileNode.id)) {
-          arr.push(fileNode);
+        if (!arr.find((f) => f.id === artifactNode.id)) {
+          arr.push(artifactNode);
         }
         artifactsByProcess.set(procNode.id, arr);
       }
@@ -253,21 +259,23 @@ function buildProcessTree(
     }
   }
 
-  // Add vertical extra spacing only for rows that contain alert badges.
+  // Reserve vertical space above rows with alerts so each alert stays near its process node.
   const maxRow = Math.max(0, ...[...rowByNodeId.values()]);
-  const rowHasAlert = new Array(maxRow + 1).fill(false);
+  const rowMaxAlertCount = new Array(maxRow + 1).fill(0);
   for (const node of processNodes) {
     const row = rowByNodeId.get(node.id);
     if (row === undefined) {
       continue;
     }
-    if ((alertsByProcess.get(node.id) ?? []).length > 0) {
-      rowHasAlert[row] = true;
+    const alertCount = (alertsByProcess.get(node.id) ?? []).length;
+    if (alertCount > rowMaxAlertCount[row]) {
+      rowMaxAlertCount[row] = alertCount;
     }
   }
-  const cumulativeExtra = new Array(maxRow + 1).fill(0);
+  const rowAlertReserve = rowMaxAlertCount.map((count) => (count > 0 ? count * (ALERT_NODE_H + ALERT_NODE_GAP) + 8 : 0));
+  const cumulativeReserveBeforeRow = new Array(maxRow + 1).fill(0);
   for (let row = 1; row <= maxRow; row += 1) {
-    cumulativeExtra[row] = cumulativeExtra[row - 1] + (rowHasAlert[row] ? ALERT_ROW_EXTRA : 0);
+    cumulativeReserveBeforeRow[row] = cumulativeReserveBeforeRow[row - 1] + rowAlertReserve[row - 1];
   }
   for (const [nodeId, row] of rowByNodeId.entries()) {
     const pos = positions.get(nodeId);
@@ -276,7 +284,7 @@ function buildProcessTree(
     }
     positions.set(nodeId, {
       x: pos.x,
-      y: CANVAS_PAD_Y + row * BASE_ROW_GAP + cumulativeExtra[row],
+      y: CANVAS_PAD_Y + row * BASE_ROW_GAP + cumulativeReserveBeforeRow[row] + rowAlertReserve[row],
     });
   }
 
@@ -284,12 +292,38 @@ function buildProcessTree(
     800,
     ...[...positions.values()].map((p) => p.x + NODE_W + CANVAS_PAD_X)
   );
+
+  const alertPositions = new Map<string, { x: number; y: number }>();
+  for (const processNode of processNodes) {
+    const nodePos = positions.get(processNode.id);
+    if (!nodePos) {
+      continue;
+    }
+    const processAlerts = alertsByProcess.get(processNode.id) ?? [];
+    for (let idx = 0; idx < processAlerts.length; idx += 1) {
+      const alertNode = processAlerts[idx];
+      alertPositions.set(alertNode.id, {
+        x: nodePos.x,
+        y: nodePos.y - (idx + 1) * (ALERT_NODE_H + ALERT_NODE_GAP),
+      });
+    }
+  }
+
   const height = Math.max(
     400,
     ...[...positions.values()].map((p) => p.y + NODE_H + CANVAS_PAD_Y + 40)
   );
 
-  return { treeNodes: processNodes, artifactsByProcess, alertsByProcess, treeEdges, positions, width, height };
+  return {
+    treeNodes: processNodes,
+    artifactsByProcess,
+    alertsByProcess,
+    alertPositions,
+    treeEdges,
+    positions,
+    width,
+    height,
+  };
 }
 
 // Popup state: which process node has its artifact list open
@@ -299,8 +333,16 @@ type HostOption = { label: string };
 interface ProcessDetailsRequest {
   eventId?: string;
   processEntityId?: string;
-  fallbackNode?: EventGraphNode;
-  sourceKind?: 'process' | 'alert';
+  sourceKind?: 'process' | 'alert' | 'artifact';
+}
+
+interface DetailsFieldRow {
+  field: string;
+  value: string;
+}
+
+interface DetailsScrollPaneProps {
+  children: React.ReactNode;
 }
 
 function prettyJson(value: unknown): string {
@@ -311,8 +353,97 @@ function prettyJson(value: unknown): string {
   }
 }
 
-function isSyntheticLineageNode(nodeId: string): boolean {
-  return nodeId.startsWith('lineage-process-');
+function scalarToDisplay(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return JSON.stringify(value);
+}
+
+function flattenDocumentFields(value: unknown, prefix: string, out: DetailsFieldRow[]): void {
+  if (value === null || value === undefined) {
+    out.push({ field: prefix, value: '' });
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      out.push({ field: prefix, value: '[]' });
+      return;
+    }
+    for (let idx = 0; idx < value.length; idx += 1) {
+      const nextKey = `${prefix}[${idx}]`;
+      const item = value[idx];
+      if (item && typeof item === 'object') {
+        flattenDocumentFields(item, nextKey, out);
+      } else {
+        out.push({ field: nextKey, value: scalarToDisplay(item) });
+      }
+    }
+    return;
+  }
+
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) {
+      out.push({ field: prefix, value: '{}' });
+      return;
+    }
+    for (const [key, nested] of entries) {
+      const nextKey = prefix ? `${prefix}.${key}` : key;
+      if (nested && typeof nested === 'object') {
+        flattenDocumentFields(nested, nextKey, out);
+      } else {
+        out.push({ field: nextKey, value: scalarToDisplay(nested) });
+      }
+    }
+    return;
+  }
+
+  out.push({ field: prefix, value: scalarToDisplay(value) });
+}
+
+function toDetailsRows(source: Record<string, any> | null): DetailsFieldRow[] {
+  if (!source) {
+    return [];
+  }
+  const rows: DetailsFieldRow[] = [];
+  flattenDocumentFields(source, '', rows);
+  rows.sort((a, b) => a.field.localeCompare(b.field));
+  return rows;
+}
+
+function DetailsScrollPane({ children }: DetailsScrollPaneProps): JSX.Element {
+  return (
+    <div style={{ flex: 1, minHeight: 0 }}>
+      <div
+        className="xdrDetailsScrollRegion"
+        style={{
+          height: '100%',
+          overflowY: 'scroll',
+          overflowX: 'hidden',
+          paddingRight: 8,
+          paddingBottom: 12,
+          boxSizing: 'border-box',
+          scrollbarGutter: 'stable',
+          overscrollBehavior: 'contain',
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function isAbortedRequestError(err: any): boolean {
+  const message = String(err?.body?.message ?? err?.message ?? err).toLowerCase();
+  return message.includes('abort') || message.includes('cancel');
 }
 
 export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
@@ -330,7 +461,10 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
   const [selectedProcessDetails, setSelectedProcessDetails] = useState<Record<string, any> | null>(null);
   const [selectedProcessDetailsEventId, setSelectedProcessDetailsEventId] = useState<string>('');
   const [processDetailsError, setProcessDetailsError] = useState<string>('');
-  const [selectedDetailsKind, setSelectedDetailsKind] = useState<'process' | 'alert'>('process');
+  const [processDetailsRequestLabel, setProcessDetailsRequestLabel] = useState<string>('');
+  const [selectedDetailsKind, setSelectedDetailsKind] = useState<'process' | 'alert' | 'artifact'>('process');
+  const [detailsViewTab, setDetailsViewTab] = useState<'table' | 'json'>('table');
+  const [detailsSearchQuery, setDetailsSearchQuery] = useState<string>('');
   const [loadingProcessDetails, setLoadingProcessDetails] = useState<boolean>(false);
   const [pageIndex, setPageIndex] = useState<number>(0);
   const [pageSize] = useState<number>(20);
@@ -344,6 +478,7 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
     scrollLeft: 0,
     scrollTop: 0,
   });
+  const detailsRequestSeqRef = useRef<number>(0);
 
   useEffect(() => {
     const timefilter = data?.query?.timefilter?.timefilter;
@@ -425,15 +560,32 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
     }
   }, [selectedAlertId, timeRange.from, timeRange.to, http, notifications]);
 
-  const loadProcessDetails = useCallback(async ({ eventId, processEntityId, fallbackNode, sourceKind }: ProcessDetailsRequest) => {
+  const loadProcessDetails = useCallback(async ({ eventId, processEntityId, sourceKind }: ProcessDetailsRequest) => {
     if (!eventId && !processEntityId) {
       return;
     }
+    const requestSeq = detailsRequestSeqRef.current + 1;
+    detailsRequestSeqRef.current = requestSeq;
+
+    const requestLabel = eventId
+      ? `event_id=${eventId}`
+      : `process_entity_id=${processEntityId}`;
+
     setSelectedDetailsKind(sourceKind ?? 'process');
+    setDetailsViewTab('table');
+    setDetailsSearchQuery('');
     setSelectedProcessNodeId(eventId || processEntityId || '');
     setLoadingProcessDetails(true);
     setProcessDetailsError('');
+    setProcessDetailsRequestLabel(requestLabel);
     setSelectedProcessDetails(null);
+
+    if (eventId && graph?.nodeSources && graph.nodeSources[eventId]) {
+      setSelectedProcessDetails(graph.nodeSources[eventId]);
+      setSelectedProcessDetailsEventId(eventId);
+      setLoadingProcessDetails(false);
+      return;
+    }
 
     const queryBase: Record<string, string> = {
       ...(eventId ? { event_id: eventId } : {}),
@@ -450,7 +602,10 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
             to: timeRange.to,
           },
         }) as AlertEventDetailsResponse;
-      } catch {
+      } catch (firstErr: any) {
+        if (isAbortedRequestError(firstErr)) {
+          throw firstErr;
+        }
         // Retry without strict time window in case the node references an older event.
         body = await http.get('/api/xdr-visualizer/alerts/event', {
           query: {
@@ -459,27 +614,25 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
           },
         }) as AlertEventDetailsResponse;
       }
+      if (requestSeq !== detailsRequestSeqRef.current) {
+        return;
+      }
       setSelectedProcessDetails((body as AlertEventDetailsResponse).source || null);
       setSelectedProcessDetailsEventId((body as AlertEventDetailsResponse).eventId || '');
     } catch (err: any) {
-      const message = String(err?.body?.message ?? err?.message ?? err);
-      if (fallbackNode) {
-        // Always show some details for rendered graph entities, even when lookup fails.
-        setSelectedProcessDetails({
-          graphNode: fallbackNode,
-          note: 'Backend lookup failed; showing graph node metadata.',
-          error: message,
-        } as Record<string, any>);
-        setSelectedProcessDetailsEventId(eventId || processEntityId || fallbackNode.id || '');
-      } else {
-        setSelectedProcessDetails(null);
-        setSelectedProcessDetailsEventId('');
-        setProcessDetailsError(message);
+      if (requestSeq !== detailsRequestSeqRef.current) {
+        return;
       }
+      const message = String(err?.body?.message ?? err?.message ?? err);
+      setSelectedProcessDetails(null);
+      setSelectedProcessDetailsEventId('');
+      setProcessDetailsError(message);
     } finally {
-      setLoadingProcessDetails(false);
+      if (requestSeq === detailsRequestSeqRef.current) {
+        setLoadingProcessDetails(false);
+      }
     }
-  }, [http, notifications, timeRange.from, timeRange.to]);
+  }, [http, timeRange.from, timeRange.to, graph]);
 
   useEffect(() => {
     loadSummary();
@@ -568,13 +721,26 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
   );
 
   const closeProcessDetails = useCallback(() => {
+    detailsRequestSeqRef.current += 1;
     setSelectedProcessNodeId('');
     setSelectedProcessDetails(null);
     setSelectedProcessDetailsEventId('');
     setProcessDetailsError('');
+    setProcessDetailsRequestLabel('');
     setSelectedDetailsKind('process');
+    setDetailsViewTab('table');
+    setDetailsSearchQuery('');
     setLoadingProcessDetails(false);
   }, []);
+
+  const detailsRows = useMemo(() => toDetailsRows(selectedProcessDetails), [selectedProcessDetails]);
+  const filteredDetailsRows = useMemo(() => {
+    const query = detailsSearchQuery.trim().toLowerCase();
+    if (!query) {
+      return detailsRows;
+    }
+    return detailsRows.filter((row) => row.field.toLowerCase().includes(query) || row.value.toLowerCase().includes(query));
+  }, [detailsRows, detailsSearchQuery]);
 
   // Close popup when graph changes
   useEffect(() => {
@@ -691,9 +857,8 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
               onClick={(e) => {
                 e.stopPropagation();
                 void loadProcessDetails({
-                  eventId: isSyntheticLineageNode(node.id) ? undefined : node.id,
+                  eventId: node.sourceEventId || node.id,
                   processEntityId: node.processEntityId,
-                  fallbackNode: node,
                   sourceKind: 'process',
                 });
               }}
@@ -708,19 +873,34 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
                 stroke={selectedProcessNodeId === node.id ? '#005eb8' : '#0077cc'}
                 strokeWidth={selectedProcessNodeId === node.id ? 3 : 2}
               />
-              <text x={pos.x + 10} y={pos.y + 18} fill="#0077cc" fontSize="11" fontWeight="bold">
+              <text x={pos.x + 10} y={pos.y + 16} fill="#0077cc" fontSize="11" fontWeight="bold">
                 PROCESS
               </text>
-              <text x={pos.x + 10} y={pos.y + 34} fill="#1a1c21" fontSize="12">
-                {`${(node.processName || node.label).slice(0, 18)}${entitySuffix ? ` · ${entitySuffix}` : ''}`}
+              <text x={pos.x + 10} y={pos.y + 32} fill="#1a1c21" fontSize="11">
+                {(node.processName || '').slice(0, 22)}
               </text>
-              <text x={pos.x + 10} y={pos.y + 46} fill="#69707d" fontSize="10">
-                {(node.processCommandLine || node.filePath || '').slice(0, 30)}
+              <text x={pos.x + 10} y={pos.y + 47} fill="#1a1c21" fontSize="10">
+                {(node.processCommandLine || '').slice(0, 24)}
               </text>
+              <text x={pos.x + 10} y={pos.y + 60} fill="#69707d" fontSize="9">
+                {`PID: ${node.processPid ?? '?'}`}
+              </text>
+              <text x={pos.x + 10} y={pos.y + 73} fill="#69707d" fontSize="9">
+                {`PPID: ${node.processPpid ?? '?'}`}
+              </text>
+              {entitySuffix && (
+                <text x={pos.x + 10} y={pos.y + 104} fill="#98a2b3" fontSize="8">
+                  {`· ${entitySuffix}`}
+                </text>
+              )}
 
-              {alerts.map((alertNode, alertIdx) => {
-                const badgeX = pos.x + alertIdx * 8;
-                const badgeY = pos.y - 34;
+              {alerts.map((alertNode) => {
+                const alertPos = processTree.alertPositions.get(alertNode.id);
+                if (!alertPos) {
+                  return null;
+                }
+                const badgeX = alertPos.x;
+                const badgeY = alertPos.y;
                 return (
                   <g
                     key={alertNode.id}
@@ -729,14 +909,13 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
                       e.stopPropagation();
                       void loadProcessDetails({
                         eventId: alertNode.id,
-                        fallbackNode: alertNode,
                         sourceKind: 'alert',
                       });
                     }}
                   >
                     <line
                       x1={badgeX + NODE_W / 2}
-                      y1={badgeY + 22}
+                      y1={badgeY + 11}
                       x2={pos.x + NODE_W / 2}
                       y2={pos.y}
                       stroke="#f04e98"
@@ -755,7 +934,7 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
                     />
                     <title>{alertNode.label}</title>
                     <text x={badgeX + 6} y={badgeY + 14} fill="#d63384" fontSize="10" fontWeight="bold">
-                      ⚠ {alertNode.label.slice(0, 28)}
+                      ! {alertNode.label.slice(0, 30)}
                     </text>
                   </g>
                 );
@@ -824,7 +1003,21 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
                           Artifacts ({artifacts.length})
                         </text>
                         {artifacts.map((art, artIdx) => (
-                          <text key={art.id} x={popX + 10} y={popY + 28 + artIdx * lineH} fontSize="10" fill="#343741">
+                          <text
+                            key={art.id}
+                            x={popX + 10}
+                            y={popY + 28 + artIdx * lineH}
+                            fontSize="10"
+                            fill="#005eb8"
+                            style={{ cursor: 'pointer' }}
+                            onClick={() => {
+                              void loadProcessDetails({
+                                eventId: art.sourceEventId || art.id,
+                                processEntityId: art.processEntityId,
+                                sourceKind: 'artifact',
+                              });
+                            }}
+                          >
                             {(art.filePath || art.label).slice(0, 46)}
                           </text>
                         ))}
@@ -855,6 +1048,13 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
 
   return (
     <div style={{ padding: 16 }}>
+      <style>
+        {`.xdrDetailsScrollRegion { scrollbar-width: auto; scrollbar-color: #98a2b3 #e5e7eb; }
+          .xdrDetailsScrollRegion::-webkit-scrollbar { width: 12px; height: 12px; }
+          .xdrDetailsScrollRegion::-webkit-scrollbar-track { background: #e5e7eb; }
+          .xdrDetailsScrollRegion::-webkit-scrollbar-thumb { background: #98a2b3; border-radius: 8px; border: 2px solid #e5e7eb; }
+          .xdrDetailsScrollRegion::-webkit-scrollbar-thumb:hover { background: #6b7280; }`}
+      </style>
       <EuiFlexGroup justifyContent="spaceBetween" alignItems="center" gutterSize="m">
         <EuiFlexItem grow={false}>
           <EuiTitle size="l">
@@ -1150,7 +1350,7 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
 
         <EuiSpacer size="s" />
         <EuiText size="xs" color="subdued">
-          Process tree shows parent→child lineage left to right. Alert badges appear above the triggering process. Click the artifact count badge to see touched files. Edge labels show time between process start events.
+          Process nodes are telemetry.process events. Alert boxes are laid out in a dedicated rail and linked to contributing processes. Artifact badges open the related telemetry artifact events and their full source documents.
         </EuiText>
       </EuiPanel>
 
@@ -1232,37 +1432,110 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
       )}
 
       {(selectedProcessNodeId || loadingProcessDetails || processDetailsError) && (
-        <EuiFlyout onClose={closeProcessDetails} ownFocus size="m">
+        <EuiFlyout onClose={closeProcessDetails} ownFocus size="m" style={{ display: 'flex', flexDirection: 'column' }}>
           <EuiFlyoutHeader hasBorder>
             <EuiTitle size="m">
-              <h2>{selectedDetailsKind === 'alert' ? 'Alert Details' : 'Process Details'}</h2>
+              <h2>
+                {selectedDetailsKind === 'alert'
+                  ? 'Alert Details'
+                  : selectedDetailsKind === 'artifact'
+                    ? 'Artifact Event Details'
+                    : 'Process Details'}
+              </h2>
             </EuiTitle>
             <EuiText size="s" color="subdued">
               <p>
                 {selectedDetailsKind === 'alert'
                   ? 'Inspect the full event document for the selected alert badge.'
-                  : 'Inspect the full event document for the selected process node.'}
+                  : selectedDetailsKind === 'artifact'
+                    ? 'Inspect the full event document for the selected artifact event.'
+                    : 'Inspect the full event document for the selected process node.'}
               </p>
             </EuiText>
           </EuiFlyoutHeader>
-          <EuiFlyoutBody>
+          <EuiFlyoutBody style={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', flex: 1 }}>
             {loadingProcessDetails && <EuiLoadingSpinner size="l" />}
             {!loadingProcessDetails && processDetailsError && (
-              <EuiCallOut color="warning" size="s" title="Process details unavailable" iconType="alert">
-                {processDetailsError}
+              <EuiCallOut color="warning" size="s" title="Event details unavailable" iconType="alert">
+                <p>{processDetailsError}</p>
+                {processDetailsRequestLabel && (
+                  <p style={{ marginTop: 8 }}>
+                    Request: <code>{processDetailsRequestLabel}</code>
+                  </p>
+                )}
               </EuiCallOut>
             )}
             {!loadingProcessDetails && selectedProcessDetails && (
-              <>
+              <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
                 <EuiText size="xs" color="subdued">event.id: {selectedProcessDetailsEventId || selectedProcessNodeId}</EuiText>
                 <EuiSpacer size="s" />
-                <EuiCodeBlock language="json" isCopyable overflowHeight={640} whiteSpace="pre">
-                  {prettyJson(selectedProcessDetails)}
-                </EuiCodeBlock>
-              </>
+
+                <EuiTabs size="s">
+                  <EuiTab
+                    onClick={() => setDetailsViewTab('table')}
+                    isSelected={detailsViewTab === 'table'}
+                  >
+                    Table
+                  </EuiTab>
+                  <EuiTab
+                    onClick={() => setDetailsViewTab('json')}
+                    isSelected={detailsViewTab === 'json'}
+                  >
+                    JSON
+                  </EuiTab>
+                </EuiTabs>
+
+                <EuiSpacer size="s" />
+
+                {detailsViewTab === 'table' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
+                    <EuiFieldSearch
+                      fullWidth
+                      compressed
+                      value={detailsSearchQuery}
+                      onChange={(event) => setDetailsSearchQuery(event.target.value)}
+                      placeholder="Filter fields and values in this event"
+                    />
+                    <EuiSpacer size="s" />
+                    <EuiText size="xs" color="subdued">
+                      Showing {filteredDetailsRows.length} of {detailsRows.length} rows
+                    </EuiText>
+                    <EuiSpacer size="s" />
+                    <DetailsScrollPane>
+                      <EuiBasicTable<DetailsFieldRow>
+                        compressed
+                        items={filteredDetailsRows}
+                        columns={[
+                          {
+                            field: 'field',
+                            name: 'Field',
+                            width: '42%',
+                            render: (value: string) => <code>{value}</code>,
+                          },
+                          {
+                            field: 'value',
+                            name: 'Value',
+                            render: (value: string) => (
+                              <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{value}</span>
+                            ),
+                          },
+                        ]}
+                      />
+                    </DetailsScrollPane>
+                  </div>
+                )}
+
+                {detailsViewTab === 'json' && (
+                  <DetailsScrollPane>
+                    <EuiCodeBlock language="json" isCopyable whiteSpace="pre">
+                      {prettyJson(selectedProcessDetails)}
+                    </EuiCodeBlock>
+                  </DetailsScrollPane>
+                )}
+              </div>
             )}
           </EuiFlyoutBody>
-          <EuiFlyoutFooter>
+          <EuiFlyoutFooter style={{ flexShrink: 0 }}>
             <EuiButtonEmpty onClick={closeProcessDetails}>Close</EuiButtonEmpty>
           </EuiFlyoutFooter>
         </EuiFlyout>

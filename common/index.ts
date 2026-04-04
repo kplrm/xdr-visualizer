@@ -41,13 +41,15 @@ export interface EventGraphNode {
   id: string;
   timestamp?: string;
   label: string;
-  kind: 'alert' | 'event' | 'process' | 'file';
+  kind: 'alert' | 'event' | 'process' | 'artifact';
   sourceEventId?: string;
   module?: string;
   type?: string;
   host?: string;
   processEntityId?: string;
   processParentEntityId?: string;
+  processPid?: number;
+  processPpid?: number;
   processName?: string;
   processCommandLine?: string;
   filePath?: string;
@@ -64,6 +66,7 @@ export interface AlertEventGraphResponse {
   alertId: string;
   nodes: EventGraphNode[];
   edges: EventGraphEdge[];
+  nodeSources?: Record<string, Record<string, any>>;
 }
 
 export interface AlertEventDetailsResponse {
