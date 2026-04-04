@@ -91,7 +91,8 @@ const NODE_W = 200;
 const NODE_H = 84;
 // Horizontal gap between depth levels, vertical gap between siblings
 const LEVEL_GAP = 280;
-const ROW_GAP = 110;
+const BASE_ROW_GAP = 110;
+const ALERT_ROW_EXTRA = 34;
 const CANVAS_PAD_X = 60;
 const CANVAS_PAD_Y = 64;
 
@@ -202,6 +203,7 @@ function buildProcessTree(
 
   const depth = new Map<string, number>();
   const positioned = new Set<string>();
+  const rowByNodeId = new Map<string, number>();
   const positions = new Map<string, { x: number; y: number }>();
 
   const normalizedChildren = (nodeId: string): string[] => {
@@ -217,9 +219,10 @@ function buildProcessTree(
   const layoutFrom = (nodeId: string, row: number, currentDepth: number): number => {
     const prevDepth = depth.get(nodeId);
     depth.set(nodeId, Math.max(prevDepth ?? 0, currentDepth));
+    rowByNodeId.set(nodeId, row);
     positions.set(nodeId, {
       x: CANVAS_PAD_X + (depth.get(nodeId) ?? currentDepth) * LEVEL_GAP,
-      y: CANVAS_PAD_Y + row * ROW_GAP,
+      y: CANVAS_PAD_Y + row * BASE_ROW_GAP,
     });
     positioned.add(nodeId);
 
@@ -250,6 +253,33 @@ function buildProcessTree(
     }
   }
 
+  // Add vertical extra spacing only for rows that contain alert badges.
+  const maxRow = Math.max(0, ...[...rowByNodeId.values()]);
+  const rowHasAlert = new Array(maxRow + 1).fill(false);
+  for (const node of processNodes) {
+    const row = rowByNodeId.get(node.id);
+    if (row === undefined) {
+      continue;
+    }
+    if ((alertsByProcess.get(node.id) ?? []).length > 0) {
+      rowHasAlert[row] = true;
+    }
+  }
+  const cumulativeExtra = new Array(maxRow + 1).fill(0);
+  for (let row = 1; row <= maxRow; row += 1) {
+    cumulativeExtra[row] = cumulativeExtra[row - 1] + (rowHasAlert[row] ? ALERT_ROW_EXTRA : 0);
+  }
+  for (const [nodeId, row] of rowByNodeId.entries()) {
+    const pos = positions.get(nodeId);
+    if (!pos) {
+      continue;
+    }
+    positions.set(nodeId, {
+      x: pos.x,
+      y: CANVAS_PAD_Y + row * BASE_ROW_GAP + cumulativeExtra[row],
+    });
+  }
+
   const width = Math.max(
     800,
     ...[...positions.values()].map((p) => p.x + NODE_W + CANVAS_PAD_X)
@@ -269,6 +299,8 @@ type HostOption = { label: string };
 interface ProcessDetailsRequest {
   eventId?: string;
   processEntityId?: string;
+  fallbackNode?: EventGraphNode;
+  sourceKind?: 'process' | 'alert';
 }
 
 function prettyJson(value: unknown): string {
@@ -298,6 +330,7 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
   const [selectedProcessDetails, setSelectedProcessDetails] = useState<Record<string, any> | null>(null);
   const [selectedProcessDetailsEventId, setSelectedProcessDetailsEventId] = useState<string>('');
   const [processDetailsError, setProcessDetailsError] = useState<string>('');
+  const [selectedDetailsKind, setSelectedDetailsKind] = useState<'process' | 'alert'>('process');
   const [loadingProcessDetails, setLoadingProcessDetails] = useState<boolean>(false);
   const [pageIndex, setPageIndex] = useState<number>(0);
   const [pageSize] = useState<number>(20);
@@ -392,29 +425,57 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
     }
   }, [selectedAlertId, timeRange.from, timeRange.to, http, notifications]);
 
-  const loadProcessDetails = useCallback(async ({ eventId, processEntityId }: ProcessDetailsRequest) => {
+  const loadProcessDetails = useCallback(async ({ eventId, processEntityId, fallbackNode, sourceKind }: ProcessDetailsRequest) => {
     if (!eventId && !processEntityId) {
       return;
     }
+    setSelectedDetailsKind(sourceKind ?? 'process');
     setSelectedProcessNodeId(eventId || processEntityId || '');
     setLoadingProcessDetails(true);
     setProcessDetailsError('');
     setSelectedProcessDetails(null);
+
+    const queryBase: Record<string, string> = {
+      ...(eventId ? { event_id: eventId } : {}),
+      ...(processEntityId ? { process_entity_id: processEntityId } : {}),
+    };
+
     try {
-      const body = await http.get('/api/xdr-visualizer/alerts/event', {
-        query: {
-          ...(eventId ? { event_id: eventId } : {}),
-          ...(processEntityId ? { process_entity_id: processEntityId } : {}),
-          from: timeRange.from,
-          to: timeRange.to,
-        },
-      });
+      let body: AlertEventDetailsResponse;
+      try {
+        body = await http.get('/api/xdr-visualizer/alerts/event', {
+          query: {
+            ...queryBase,
+            from: timeRange.from,
+            to: timeRange.to,
+          },
+        }) as AlertEventDetailsResponse;
+      } catch {
+        // Retry without strict time window in case the node references an older event.
+        body = await http.get('/api/xdr-visualizer/alerts/event', {
+          query: {
+            ...queryBase,
+            hours: 168,
+          },
+        }) as AlertEventDetailsResponse;
+      }
       setSelectedProcessDetails((body as AlertEventDetailsResponse).source || null);
       setSelectedProcessDetailsEventId((body as AlertEventDetailsResponse).eventId || '');
     } catch (err: any) {
-      setSelectedProcessDetails(null);
-      setSelectedProcessDetailsEventId('');
-      setProcessDetailsError(String(err?.body?.message ?? err?.message ?? err));
+      const message = String(err?.body?.message ?? err?.message ?? err);
+      if (fallbackNode) {
+        // Always show some details for rendered graph entities, even when lookup fails.
+        setSelectedProcessDetails({
+          graphNode: fallbackNode,
+          note: 'Backend lookup failed; showing graph node metadata.',
+          error: message,
+        } as Record<string, any>);
+        setSelectedProcessDetailsEventId(eventId || processEntityId || fallbackNode.id || '');
+      } else {
+        setSelectedProcessDetails(null);
+        setSelectedProcessDetailsEventId('');
+        setProcessDetailsError(message);
+      }
     } finally {
       setLoadingProcessDetails(false);
     }
@@ -511,6 +572,7 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
     setSelectedProcessDetails(null);
     setSelectedProcessDetailsEventId('');
     setProcessDetailsError('');
+    setSelectedDetailsKind('process');
     setLoadingProcessDetails(false);
   }, []);
 
@@ -631,6 +693,8 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
                 void loadProcessDetails({
                   eventId: isSyntheticLineageNode(node.id) ? undefined : node.id,
                   processEntityId: node.processEntityId,
+                  fallbackNode: node,
+                  sourceKind: 'process',
                 });
               }}
             >
@@ -656,9 +720,20 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
 
               {alerts.map((alertNode, alertIdx) => {
                 const badgeX = pos.x + alertIdx * 8;
-                const badgeY = pos.y - 26;
+                const badgeY = pos.y - 34;
                 return (
-                  <g key={alertNode.id}>
+                  <g
+                    key={alertNode.id}
+                    style={{ cursor: 'pointer' }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void loadProcessDetails({
+                        eventId: alertNode.id,
+                        fallbackNode: alertNode,
+                        sourceKind: 'alert',
+                      });
+                    }}
+                  >
                     <line
                       x1={badgeX + NODE_W / 2}
                       y1={badgeY + 22}
@@ -1160,10 +1235,14 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
         <EuiFlyout onClose={closeProcessDetails} ownFocus size="m">
           <EuiFlyoutHeader hasBorder>
             <EuiTitle size="m">
-              <h2>Process Details</h2>
+              <h2>{selectedDetailsKind === 'alert' ? 'Alert Details' : 'Process Details'}</h2>
             </EuiTitle>
             <EuiText size="s" color="subdued">
-              <p>Inspect the full event document for the selected process node.</p>
+              <p>
+                {selectedDetailsKind === 'alert'
+                  ? 'Inspect the full event document for the selected alert badge.'
+                  : 'Inspect the full event document for the selected process node.'}
+              </p>
             </EuiText>
           </EuiFlyoutHeader>
           <EuiFlyoutBody>
