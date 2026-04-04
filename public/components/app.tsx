@@ -93,7 +93,7 @@ const NODE_H = 84;
 const LEVEL_GAP = 280;
 const ROW_GAP = 110;
 const CANVAS_PAD_X = 60;
-const CANVAS_PAD_Y = 60;
+const CANVAS_PAD_Y = 64;
 
 function fmtTimeDelta(fromTs: string | undefined, toTs: string | undefined): string {
   if (!fromTs || !toTs) {
@@ -301,7 +301,16 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
   const [loadingProcessDetails, setLoadingProcessDetails] = useState<boolean>(false);
   const [pageIndex, setPageIndex] = useState<number>(0);
   const [pageSize] = useState<number>(20);
+  const [graphZoom, setGraphZoom] = useState<number>(1);
+  const [isPanningGraph, setIsPanningGraph] = useState<boolean>(false);
   const svgRef = useRef<SVGSVGElement>(null);
+  const panStateRef = useRef<{ active: boolean; startX: number; startY: number; scrollLeft: number; scrollTop: number }>({
+    active: false,
+    startX: 0,
+    startY: 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+  });
 
   useEffect(() => {
     const timefilter = data?.query?.timefilter?.timefilter;
@@ -518,16 +527,58 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
         maxWidth: '100%',
         overflowX: 'auto',
         overflowY: 'auto',
-        maxHeight: graphFullscreen ? 'calc(100vh - 220px)' : 560,
+        height: graphFullscreen ? '100%' : undefined,
+        maxHeight: graphFullscreen ? '100%' : 560,
         border: '1px solid #d3dae6',
         borderRadius: 8,
         background: '#f9fbfd',
         position: 'relative',
-        paddingBottom: 8,
+        paddingBottom: graphFullscreen ? 0 : 8,
+        cursor: isPanningGraph ? 'grabbing' : 'grab',
+        userSelect: 'none',
       }}
       onClick={() => setArtifactPopup(null)}
+      onMouseDown={(event) => {
+        if (event.button !== 0) {
+          return;
+        }
+        const target = event.currentTarget;
+        panStateRef.current = {
+          active: true,
+          startX: event.clientX,
+          startY: event.clientY,
+          scrollLeft: target.scrollLeft,
+          scrollTop: target.scrollTop,
+        };
+        setIsPanningGraph(true);
+      }}
+      onMouseMove={(event) => {
+        if (!panStateRef.current.active) {
+          return;
+        }
+        event.preventDefault();
+        const target = event.currentTarget;
+        const deltaX = event.clientX - panStateRef.current.startX;
+        const deltaY = event.clientY - panStateRef.current.startY;
+        target.scrollLeft = panStateRef.current.scrollLeft - deltaX;
+        target.scrollTop = panStateRef.current.scrollTop - deltaY;
+      }}
+      onMouseUp={() => {
+        panStateRef.current.active = false;
+        setIsPanningGraph(false);
+      }}
+      onMouseLeave={() => {
+        panStateRef.current.active = false;
+        setIsPanningGraph(false);
+      }}
     >
-      <svg ref={svgRef} width={processTree.width} height={processTree.height} style={{ display: 'block' }}>
+      <svg
+        ref={svgRef}
+        width={Math.ceil(processTree.width * graphZoom)}
+        height={Math.ceil(processTree.height * graphZoom)}
+        style={{ display: 'block' }}
+      >
+        <g transform={`scale(${graphZoom})`}>
         {processTree.treeEdges.map(({ edge, fromNode, toNode }) => {
           const from = processTree.positions.get(edge.from);
           const to = processTree.positions.get(edge.to);
@@ -716,6 +767,7 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
             <feDropShadow dx="2" dy="4" stdDeviation="4" floodColor="#00000022" />
           </filter>
         </defs>
+        </g>
       </svg>
     </div>
   ) : null;
@@ -967,6 +1019,30 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
                 />
               </EuiFlexItem>
               <EuiFlexItem grow={false}>
+                <EuiButtonIcon
+                  iconType="minusInCircle"
+                  aria-label="Zoom out graph"
+                  onClick={() => setGraphZoom((current) => Math.max(0.5, Number((current - 0.1).toFixed(2))))}
+                  isDisabled={graphZoom <= 0.5}
+                />
+              </EuiFlexItem>
+              <EuiFlexItem grow={false}>
+                <EuiText size="xs" color="subdued">{Math.round(graphZoom * 100)}%</EuiText>
+              </EuiFlexItem>
+              <EuiFlexItem grow={false}>
+                <EuiButtonIcon
+                  iconType="plusInCircle"
+                  aria-label="Zoom in graph"
+                  onClick={() => setGraphZoom((current) => Math.min(2.5, Number((current + 0.1).toFixed(2))))}
+                  isDisabled={graphZoom >= 2.5}
+                />
+              </EuiFlexItem>
+              <EuiFlexItem grow={false}>
+                <EuiButtonEmpty size="xs" onClick={() => setGraphZoom(1)}>
+                  Reset zoom
+                </EuiButtonEmpty>
+              </EuiFlexItem>
+              <EuiFlexItem grow={false}>
                 <EuiButton size="s" onClick={loadGraph} isLoading={loadingGraph}>
                   Reload Graph
                 </EuiButton>
@@ -1007,36 +1083,75 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
         <div
           style={{
             position: 'fixed',
-            top: 88,
+            top: 100,
             left: 24,
             right: 24,
             bottom: 24,
             zIndex: 1600,
-            background: 'rgba(255,255,255,0.94)',
+            background: '#ffffff',
             padding: 16,
             boxShadow: '0 20px 48px rgba(0,0,0,0.18)',
-            border: '1px solid #d3dae6',
+            border: '2px solid #b8c4d6',
             borderRadius: 12,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
+            boxSizing: 'border-box',
           }}
         >
-          <EuiFlexGroup alignItems="center" justifyContent="spaceBetween" gutterSize="s" responsive={false}>
-            <EuiFlexItem grow={false}>
-              <EuiTitle size="s">
-                <h2>Attack Footprint Graph</h2>
-              </EuiTitle>
-            </EuiFlexItem>
-            <EuiFlexItem grow={false}>
-              <EuiButtonIcon
-                iconType="cross"
-                aria-label="Close full screen graph"
-                onClick={() => setGraphFullscreen(false)}
-              />
-            </EuiFlexItem>
-          </EuiFlexGroup>
-          <EuiSpacer size="m" />
+          <div
+            style={{
+              width: '100%',
+              border: '1px solid #d3dae6',
+              borderRadius: 8,
+              padding: '4px 8px',
+              marginBottom: 8,
+              background: 'rgba(255,255,255,0.98)',
+            }}
+          >
+            <EuiFlexGroup gutterSize="s" alignItems="center" justifyContent="spaceBetween" responsive={false}>
+              <EuiFlexItem grow={false}>
+                <EuiTitle size="xs">
+                  <h3>Attack Footprint Graph</h3>
+                </EuiTitle>
+              </EuiFlexItem>
+              <EuiFlexItem grow={false}>
+                <EuiFlexGroup gutterSize="s" alignItems="center" responsive={false}>
+                  <EuiFlexItem grow={false}>
+                    <EuiButtonIcon
+                      iconType="minusInCircle"
+                      aria-label="Zoom out graph"
+                      onClick={() => setGraphZoom((current) => Math.max(0.5, Number((current - 0.1).toFixed(2))))}
+                      isDisabled={graphZoom <= 0.5}
+                    />
+                  </EuiFlexItem>
+                  <EuiFlexItem grow={false}>
+                    <EuiText size="xs" color="subdued">{Math.round(graphZoom * 100)}%</EuiText>
+                  </EuiFlexItem>
+                  <EuiFlexItem grow={false}>
+                    <EuiButtonIcon
+                      iconType="plusInCircle"
+                      aria-label="Zoom in graph"
+                      onClick={() => setGraphZoom((current) => Math.min(2.5, Number((current + 0.1).toFixed(2))))}
+                      isDisabled={graphZoom >= 2.5}
+                    />
+                  </EuiFlexItem>
+                  <EuiFlexItem grow={false}>
+                    <EuiButtonEmpty size="xs" onClick={() => setGraphZoom(1)}>
+                      Reset
+                    </EuiButtonEmpty>
+                  </EuiFlexItem>
+                  <EuiFlexItem grow={false}>
+                    <EuiButtonIcon
+                      iconType="cross"
+                      aria-label="Close full screen graph"
+                      onClick={() => setGraphFullscreen(false)}
+                    />
+                  </EuiFlexItem>
+                </EuiFlexGroup>
+              </EuiFlexItem>
+            </EuiFlexGroup>
+          </div>
           <div style={{ flex: 1, minHeight: 0 }}>{graphSurface}</div>
         </div>
       )}
