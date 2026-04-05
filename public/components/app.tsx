@@ -848,7 +848,7 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
           const fileCount = artifacts.filter((a) => a.type === 'file.path' || (a.filePath && !a.module?.includes('library'))).length;
           const libCount = artifacts.filter((a) => a.module?.includes('library')).length;
           const artifactBtnY = pos.y + NODE_H - 16;
-          const entitySuffix = node.processEntityId ? node.processEntityId.slice(-6) : '';
+
 
           return (
             <g
@@ -888,9 +888,9 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
               <text x={pos.x + 10} y={pos.y + 73} fill="#69707d" fontSize="9">
                 {`PPID: ${node.processPpid ?? '?'}`}
               </text>
-              {entitySuffix && (
-                <text x={pos.x + 10} y={pos.y + 104} fill="#98a2b3" fontSize="8">
-                  {`· ${entitySuffix}`}
+              {node.processEntityId && (
+                <text x={pos.x + 10} y={pos.y + 86} fill="#98a2b3" fontSize="8">
+                  {node.processEntityId}
                 </text>
               )}
 
