@@ -7,8 +7,7 @@
   "scripts": {
     "build": "bash ./scripts/build_external.sh",
     "plugin-helpers": "node ../OpenSearch-Dashboards/scripts/plugin_helpers",
-    "osd": "node ../OpenSearch-Dashboards/scripts/osd",
-    "lint": "echo lint placeholder"
+    "osd": "node ../OpenSearch-Dashboards/scripts/osd"
   },
   "devDependencies": {
     "@swc/helpers": "^0.5.17",

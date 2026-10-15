@@ -10,7 +10,6 @@
   ],
   "exclude": ["node_modules", "*/node_modules/"],
   "compilerOptions": {
-    "ignoreDeprecations": "6.0",
     "rootDir": "..",
     "outDir": "./target",
     "skipLibCheck": true,

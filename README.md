@@ -33,5 +33,5 @@ It consumes indexed data from:
 
 ```bash
 cd /home/kplrm/github/xdr-visualizer
-yarn build --opensearch-dashboards-version 3.5.0
+yarn build --opensearch-dashboards-version 3.9.0
 ```

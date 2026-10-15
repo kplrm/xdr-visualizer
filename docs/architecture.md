@@ -19,8 +19,8 @@ The footprint layer uses:
 
 ## Data Sources
 
-- Security alerts index pattern: `.xdr-agent-security-*`
-- Telemetry index pattern: `.xdr-agent-telemetry-*`
+- Security alerts: `xdr-agent-security` stream and legacy `.xdr-agent-security-*` indices.
+- Telemetry: `xdr-agent-telemetry` stream and legacy `.xdr-agent-telemetry-*` indices.
 
 ## Correlation Strategy
 
@@ -37,7 +37,6 @@ This keeps response size predictable while preserving useful attack-story contex
 ## Ownership
 
 - `xdr-agent`: emits telemetry and alerts with lineage fields.
-- `xdr-defense`: owns detection/prevention content and rollout contracts.
 - `xdr-visualizer`: investigative UI and graph-oriented correlation view.
 
 ## Non-Goals
