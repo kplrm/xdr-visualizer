@@ -21,8 +21,8 @@ Out of scope:
 
 It consumes indexed data from:
 
-- `.xdr-agent-security-*`
-- `.xdr-agent-telemetry-*`
+- `xdr-agent-security` data stream
+- `xdr-agent-telemetry` data stream
 
 ## Main Routes
 

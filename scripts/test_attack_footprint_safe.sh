@@ -29,8 +29,8 @@ require_cmd systemctl
 
 OPENSEARCH_URL="${OPENSEARCH_URL:-http://localhost:9200}"
 OSD_URL="${OSD_URL:-http://localhost:5601}"
-SECURITY_INDEX="${SECURITY_INDEX:-.xdr-agent-security-*}"
-TELEMETRY_INDEX="${TELEMETRY_INDEX:-.xdr-agent-telemetry-*}"
+SECURITY_INDEX="${SECURITY_INDEX:-xdr-agent-security}"
+TELEMETRY_INDEX="${TELEMETRY_INDEX:-xdr-agent-telemetry}"
 SERVICE_NAME="${SERVICE_NAME:-xdr-agent}"
 SEARCH_TIMEOUT_SECONDS="${SEARCH_TIMEOUT_SECONDS:-60}"
 SEARCH_POLL_SECONDS="${SEARCH_POLL_SECONDS:-5}"

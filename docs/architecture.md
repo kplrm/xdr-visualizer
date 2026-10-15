@@ -19,8 +19,8 @@ The footprint layer uses:
 
 ## Data Sources
 
-- Security alerts: `xdr-agent-security` stream and legacy `.xdr-agent-security-*` indices.
-- Telemetry: `xdr-agent-telemetry` stream and legacy `.xdr-agent-telemetry-*` indices.
+- Security alerts: `xdr-agent-security` data stream.
+- Telemetry: `xdr-agent-telemetry` data stream.
 
 ## Correlation Strategy
 

@@ -11,8 +11,8 @@ import {
 
 const { schema } = require('@osd/config-schema');
 
-const SECURITY_INDEX = 'xdr-agent-security,.xdr-agent-security-*';
-const TELEMETRY_INDEX = 'xdr-agent-telemetry,.xdr-agent-telemetry-*';
+const SECURITY_INDEX = 'xdr-agent-security';
+const TELEMETRY_INDEX = 'xdr-agent-telemetry';
 const MAX_CHAIN_ENTITIES = 40;
 const MAX_EVENT_IDS_FOR_ALERT_LINK = 120;
 
