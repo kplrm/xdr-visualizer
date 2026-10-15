@@ -34,6 +34,13 @@ rm -rf "${PLUGIN_DIR}"
 mkdir -p "${PLUGIN_DIR}"
 tar -C "${ROOT_DIR}" --exclude='./.git' --exclude='./node_modules' --exclude='./build' --exclude='./target' --exclude='./.yarn' --exclude='./.pnp.*' -cf - . | tar -C "${PLUGIN_DIR}" -xf -
 cd "${PLUGIN_DIR}"
+# package.json owns the plugin version; derive metadata only in staging.
+node <<'NODE'
+const fs = require('fs');
+const manifest = JSON.parse(fs.readFileSync('opensearch_dashboards.json', 'utf8'));
+manifest.version = require('./package.json').version;
+fs.writeFileSync('opensearch_dashboards.json', JSON.stringify(manifest, null, 2) + '\n');
+NODE
 node ../../scripts/plugin_helpers build "$@"
 mkdir -p "${ROOT_DIR}/build"
 cp -f "${PLUGIN_DIR}/build/"*.zip "${ROOT_DIR}/build/"
