@@ -5,6 +5,7 @@
   "description": "OpenSearch Dashboards plugin for XDR threat hunting and attack footprint visualization",
   "main": "index.js",
   "scripts": {
+    "test": "node --test scripts/test_alerts.cjs",
     "build": "bash ./scripts/build_external.sh",
     "plugin-helpers": "node ../OpenSearch-Dashboards/scripts/plugin_helpers",
     "osd": "node ../OpenSearch-Dashboards/scripts/osd"

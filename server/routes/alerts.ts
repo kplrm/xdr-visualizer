@@ -36,14 +36,6 @@ function normalizeSource(hit: any): any {
   return hit?._source ?? {};
 }
 
-function payloadFrom(source: any): Record<string, any> {
-  const payload = source?.payload;
-  if (!payload || typeof payload !== 'object') {
-    return {};
-  }
-  return payload as Record<string, any>;
-}
-
 function hasValue(value: unknown): boolean {
   if (value === null || value === undefined) {
     return false;
@@ -75,17 +67,6 @@ function readPath(target: any, path: string): any {
 function sourceField(source: any, ...paths: string[]): any {
   for (const path of paths) {
     const value = readPath(source, path);
-    if (hasValue(value)) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function payloadField(source: any, ...paths: string[]): any {
-  const payload = payloadFrom(source);
-  for (const path of paths) {
-    const value = readPath(payload, path);
     if (hasValue(value)) {
       return value;
     }
@@ -131,15 +112,15 @@ function mapAlert(source: any, fallbackId?: string): VisualizerAlertItem {
     host: safeString(sourceField(source, 'host.hostname'), 'unknown'),
     severity,
     module: safeString(sourceField(source, 'event.module', 'module'), 'unknown'),
-    ruleId: safeString(payloadField(source, 'rule.id')) || undefined,
-    ruleName: safeString(payloadField(source, 'rule.name')) || undefined,
-    action: safeString(payloadField(source, 'event.action')) || undefined,
-    sourceModule: safeString(payloadField(source, 'source.module')) || undefined,
-    sourceType: safeString(payloadField(source, 'source.type')) || undefined,
-    processEntityId: safeString(payloadField(source, 'process.entity_id')) || undefined,
-    processName: safeString(payloadField(source, 'process.name')) || undefined,
-    processCommandLine: safeString(payloadField(source, 'process.command_line')) || undefined,
-    filePath: safeString(payloadField(source, 'file.path', 'process.executable')) || undefined,
+    ruleId: safeString(sourceField(source, 'rule.id')) || undefined,
+    ruleName: safeString(sourceField(source, 'rule.name')) || undefined,
+    action: safeString(sourceField(source, 'event.action')) || undefined,
+    sourceModule: safeString(sourceField(source, 'source.module')) || undefined,
+    sourceType: safeString(sourceField(source, 'source.type')) || undefined,
+    processEntityId: safeString(sourceField(source, 'process.entity_id')) || undefined,
+    processName: safeString(sourceField(source, 'process.name')) || undefined,
+    processCommandLine: safeString(sourceField(source, 'process.command_line')) || undefined,
+    filePath: safeString(sourceField(source, 'file.path', 'process.executable')) || undefined,
   };
 }
 
@@ -206,29 +187,29 @@ function eventModule(source: any): string {
 }
 
 function processEntity(source: any): string {
-  return safeString(payloadField(source, 'process.entity_id', 'process.entity.id', 'entity_id', 'entity.id'));
+  return safeString(sourceField(source, 'process.entity_id', 'process.entity.id', 'entity_id', 'entity.id'));
 }
 
 function processParentEntity(source: any): string {
-  return safeString(payloadField(source, 'process.parent.entity_id', 'process.parent.entity.id', 'parent.entity_id', 'parent.entity.id'));
+  return safeString(sourceField(source, 'process.parent.entity_id', 'process.parent.entity.id', 'parent.entity_id', 'parent.entity.id'));
 }
 
 function processName(source: any): string {
-  return safeString(payloadField(source, 'process.name', 'process.executable'));
+  return safeString(sourceField(source, 'process.name', 'process.executable'));
 }
 
 function processCommandLine(source: any): string {
-  return safeString(payloadField(source, 'process.command_line', 'process.cmdline', 'process.executable'));
+  return safeString(sourceField(source, 'process.command_line', 'process.cmdline', 'process.executable'));
 }
 
 function processPid(source: any): number | undefined {
-  const raw = payloadField(source, 'process.pid', 'pid');
+  const raw = sourceField(source, 'process.pid', 'pid');
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function processPpid(source: any): number | undefined {
-  const raw = payloadField(source, 'process.ppid', 'process.parent.pid', 'ppid');
+  const raw = sourceField(source, 'process.ppid', 'process.parent.pid', 'ppid');
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
@@ -265,7 +246,7 @@ function alertNodeFromSource(source: any, fallbackId: string): EventGraphNode {
   return {
     id,
     timestamp: eventTimestamp(source),
-    label: safeString(payloadField(source, 'rule.name') || payloadField(source, 'rule.id') || sourceField(source, 'event.action') || id, id),
+    label: safeString(sourceField(source, 'rule.name') || sourceField(source, 'rule.id') || sourceField(source, 'event.action') || id, id),
     kind: 'alert',
     sourceEventId: id,
     module: eventModule(source) || undefined,
@@ -275,7 +256,7 @@ function alertNodeFromSource(source: any, fallbackId: string): EventGraphNode {
     processParentEntityId: parentEntityId || undefined,
     processName: processName(source) || undefined,
     processCommandLine: processCommandLine(source) || undefined,
-    filePath: safeString(payloadField(source, 'file.path')) || undefined,
+    filePath: safeString(sourceField(source, 'file.path')) || undefined,
   };
 }
 
@@ -299,7 +280,7 @@ function artifactRef(source: any): ArtifactRef | null {
   ];
 
   for (const entry of candidates) {
-    const value = safeString(payloadField(source, entry.path) || sourceField(source, entry.path));
+    const value = safeString(sourceField(source, entry.path));
     if (value) {
       return { value, type: entry.type };
     }
@@ -400,12 +381,12 @@ function lineageNodeId(entityId: string): string {
 }
 
 function buildAncestorLineage(triggerSource: any, triggerNode: EventGraphNode): { nodes: EventGraphNode[]; edges: EventGraphEdge[] } {
-  const payloadProcess = payloadField(triggerSource, 'process');
-  const directParent = payloadProcess && typeof payloadProcess === 'object'
-    ? readPath(payloadProcess, 'parent')
+  const processDetails = sourceField(triggerSource, 'process');
+  const directParent = processDetails && typeof processDetails === 'object'
+    ? readPath(processDetails, 'parent')
     : undefined;
-  const ancestors = payloadProcess && typeof payloadProcess === 'object' && Array.isArray(readPath(payloadProcess, 'ancestors'))
-    ? (readPath(payloadProcess, 'ancestors') as any[])
+  const ancestors = processDetails && typeof processDetails === 'object' && Array.isArray(readPath(processDetails, 'ancestors'))
+    ? (readPath(processDetails, 'ancestors') as any[])
     : [];
 
   const ordered: any[] = [];
@@ -469,7 +450,7 @@ function buildAncestorLineage(triggerSource: any, triggerNode: EventGraphNode): 
 
 function isProcessStartEvent(source: any): boolean {
   return safeString(sourceField(source, 'event.type')) === 'process.start'
-    || safeString(payloadField(source, 'source.type')) === 'process.start';
+    || safeString(sourceField(source, 'source.type')) === 'process.start';
 }
 
 function pickRepresentativeProcessSource(events: any[]): any | null {
@@ -523,7 +504,7 @@ export function registerAlertRoutes(router: any): void {
               query: { bool: { filter: queryFilter } },
               aggs: {
                 by_severity: { terms: { field: 'event.severity', size: 10 } },
-                by_rule: { terms: { field: 'payload.rule.name', size: 8 } },
+                by_rule: { terms: { field: 'rule.name', size: 8 } },
                 by_host: { terms: { field: 'host.hostname', size: 8 } },
               },
             },
@@ -610,7 +591,6 @@ export function registerAlertRoutes(router: any): void {
             query: {
               bool: {
                 should: [
-                  { term: { 'id.keyword': alertId } },
                   { term: { id: alertId } },
                   { term: { _id: alertId } },
                 ],
@@ -630,8 +610,8 @@ export function registerAlertRoutes(router: any): void {
         const source = normalizeSource(alertHit);
 
         const host = safeString(sourceField(source, 'host.hostname'));
-        const sourceEventId = safeString(payloadField(source, 'source.event.id'));
-        const processEntityId = safeString(payloadField(source, 'process.entity_id'));
+        const sourceEventId = safeString(sourceField(source, 'source.event.id'));
+        const processEntityId = safeString(sourceField(source, 'process.entity_id'));
         const timeFilter = { range: { '@timestamp': { gte: from || `now-${hours}h`, lte: to || 'now' } } };
         const alertTs = Date.parse(safeString(sourceField(source, '@timestamp')));
         const lineageTimeFilter = Number.isFinite(alertTs)
@@ -660,7 +640,7 @@ export function registerAlertRoutes(router: any): void {
                     { term: { 'event.module': 'telemetry.process' } },
                     ...(host ? [{ term: { 'host.hostname': host } }] : []),
                   ],
-                  should: [{ term: { 'id.keyword': sourceEventId } }, { term: { id: sourceEventId } }, { term: { _id: sourceEventId } }],
+                  should: [{ term: { id: sourceEventId } }, { term: { _id: sourceEventId } }],
                   minimum_should_match: 1,
                 },
               },
@@ -689,7 +669,7 @@ export function registerAlertRoutes(router: any): void {
                   ],
                   should: termsShould([
                     {
-                      fields: ['payload.process.entity_id.keyword', 'process.entity_id.keyword'],
+                      fields: ['process.entity_id'],
                       values: [processEntityId],
                     },
                   ]),
@@ -797,7 +777,7 @@ export function registerAlertRoutes(router: any): void {
         for (let depth = 0; depth < 6 && upFrontier.length > 0 && processHitsByEntity.size < MAX_CHAIN_ENTITIES; depth += 1) {
           const events = await loadProcessEvents(
             `lineage_up_d${depth}`,
-            ['payload.process.entity_id.keyword', 'process.entity_id.keyword', 'payload.process.entity_id', 'process.entity_id'],
+            ['process.entity_id'],
             upFrontier,
             300
           );
@@ -824,7 +804,7 @@ export function registerAlertRoutes(router: any): void {
         for (let depth = 0; depth < 6 && downFrontier.length > 0 && processHitsByEntity.size < MAX_CHAIN_ENTITIES; depth += 1) {
           const events = await loadProcessEvents(
             `lineage_down_d${depth}`,
-            ['payload.process.parent.entity_id.keyword', 'process.parent.entity_id.keyword', 'payload.process.parent.entity_id', 'process.parent.entity_id'],
+            ['process.parent.entity_id'],
             downFrontier,
             500
           );
@@ -907,15 +887,15 @@ export function registerAlertRoutes(router: any): void {
                     filter: [timeFilter, { term: { 'event.kind': 'alert' } }, ...(host ? [{ term: { 'host.hostname': host } }] : [])],
                     should: termsShould([
                       {
-                        fields: ['payload.process.entity_id.keyword'],
+                        fields: ['process.entity_id'],
                         values: processEntityIds,
                       },
                       {
-                        fields: ['payload.process.parent.entity_id.keyword'],
+                        fields: ['process.parent.entity_id'],
                         values: processEntityIds,
                       },
                       {
-                        fields: ['payload.source.event.id.keyword'],
+                        fields: ['source.event.id'],
                         values: processSourceEventIds,
                       },
                     ]),
@@ -949,11 +929,11 @@ export function registerAlertRoutes(router: any): void {
                     must_not: [{ term: { 'event.module': 'telemetry.process' } }],
                     should: termsShould([
                       {
-                        fields: ['payload.process.entity_id.keyword', 'process.entity_id.keyword'],
+                        fields: ['process.entity_id'],
                         values: processEntityIds,
                       },
                       {
-                        fields: ['payload.process.parent.entity_id.keyword', 'process.parent.entity_id.keyword'],
+                        fields: ['process.parent.entity_id'],
                         values: processEntityIds,
                       },
                     ]),
@@ -1015,7 +995,7 @@ export function registerAlertRoutes(router: any): void {
 
         for (const alertNode of alertNodes) {
           const alertSource = alertSourcesById.get(alertNode.id);
-          const linkedBySourceEventId = safeString(payloadField(alertSource, 'source.event.id'));
+          const linkedBySourceEventId = safeString(sourceField(alertSource, 'source.event.id'));
           let targetNode: EventGraphNode | undefined;
 
           if (linkedBySourceEventId) {
@@ -1256,21 +1236,13 @@ export function registerAlertRoutes(router: any): void {
 
         const should: any[] = [];
         if (eventId) {
-          should.push({ term: { 'id.keyword': eventId } }, { term: { id: eventId } }, { term: { _id: eventId } });
+          should.push({ term: { id: eventId } }, { term: { _id: eventId } });
         }
         if (processEntityId) {
-          should.push(
-            { term: { 'payload.process.entity_id.keyword': processEntityId } },
-            { term: { 'payload.process.entity_id': processEntityId } },
-            { term: { 'payload.process.parent.entity_id.keyword': processEntityId } },
-            { term: { 'payload.process.parent.entity_id': processEntityId } },
-            { term: { 'payload.process.ancestors.entity_id.keyword': processEntityId } },
-            { term: { 'payload.process.ancestors.entity_id': processEntityId } },
-            { term: { 'payload.process.group_leader.entity_id.keyword': processEntityId } },
-            { term: { 'payload.process.group_leader.entity_id': processEntityId } },
-            { term: { 'process.entity_id.keyword': processEntityId } },
-            { term: { 'process.entity_id': processEntityId } }
-          );
+          should.push(...[
+            'process.entity_id', 'process.parent.entity_id',
+            'process.ancestors.entity_id', 'process.group_leader.entity_id',
+          ].map((field) => ({ term: { [field]: processEntityId } })));
         }
 
         const detailResult = await client.search({

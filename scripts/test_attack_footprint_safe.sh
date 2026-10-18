@@ -148,19 +148,19 @@ while (( elapsed <= SEARCH_TIMEOUT_SECONDS )); do
         {
           "bool": {
             "must": [
-              {"match_phrase": {"payload.rule.id": "malware.hash.match"}},
-              {"match_phrase": {"payload.rule.name": "${RULE_NAME}"}},
-              {"match_phrase": {"payload.file.path": "${TRIGGER_BIN}"}},
-              {"match_phrase": {"payload.source.module": "telemetry.process"}}
+              {"match_phrase": {"rule.id": "malware.hash.match"}},
+              {"match_phrase": {"rule.name": "${RULE_NAME}"}},
+              {"match_phrase": {"file.path": "${TRIGGER_BIN}"}},
+              {"match_phrase": {"source.module": "telemetry.process"}}
             ]
           }
         },
         {
           "bool": {
             "must": [
-              {"match_phrase": {"payload.rule.id": "${MEMORY_RULE_ID}"}},
-              {"match_phrase": {"payload.process.command_line": "${SCENARIO_DIR}"}},
-              {"match_phrase": {"payload.source.module": "telemetry.process"}}
+              {"match_phrase": {"rule.id": "${MEMORY_RULE_ID}"}},
+              {"match_phrase": {"process.command_line": "${SCENARIO_DIR}"}},
+              {"match_phrase": {"source.module": "telemetry.process"}}
             ]
           }
         }
@@ -177,7 +177,7 @@ EOF_ALERT_SEARCH
 
   if [[ "${hit_count}" =~ ^[0-9]+$ ]] && (( hit_count > 0 )); then
     ALERT_ID="$(jq -r '.hits.hits[0]._id' <<<"${result}")"
-    SOURCE_EVENT_ID="$(jq -r '.hits.hits[0]._source.payload["source.event.id"] // ""' <<<"${result}")"
+    SOURCE_EVENT_ID="$(jq -r '.hits.hits[0]._source["source.event.id"] // ""' <<<"${result}")"
     break
   fi
 
@@ -222,8 +222,8 @@ telemetry_body="$(cat <<EOF_TEL
           "bool": {
             "should": [
               {"query_string": {"query": "${SCENARIO_DIR}"}},
-              {"match_phrase": {"payload.process.executable": "${TRIGGER_BIN}"}},
-              {"match_phrase": {"payload.process.command_line": "${SCENARIO_DIR}"}},
+              {"match_phrase": {"process.executable": "${TRIGGER_BIN}"}},
+              {"match_phrase": {"process.command_line": "${SCENARIO_DIR}"}},
               {"term": {"id.keyword": "${SOURCE_EVENT_ID}"}},
               {"term": {"id": "${SOURCE_EVENT_ID}"}},
               {"term": {"_id": "${SOURCE_EVENT_ID}"}}
@@ -272,7 +272,7 @@ security_body="$(cat <<EOF_SEC
       "must": [
         {"range": {"@timestamp": {"gte": "${SCRIPT_START_UTC}"}}},
         {"term": {"event.kind": "alert"}},
-        {"match_phrase": {"payload.rule.name": "${RULE_NAME}"}}
+        {"match_phrase": {"rule.name": "${RULE_NAME}"}}
       ]
     }
   }
@@ -301,11 +301,11 @@ echo "Sample graph process nodes:"
 jq -r '.nodes[] | select(.kind=="process") | "- \(.id) | \(.label) | pid=\(.processPid // "na") ppid=\(.processPpid // "na")"' <<<"${graph_json}" | head -n 12
 echo ""
 echo "Sample telemetry events touching scenario artifacts:"
-jq -r '.hits.hits[] | "- \(._source["@timestamp"] // "") | \(._source["event.type"] // "") | \(._source["event.module"] // "") | \(._source.payload["file.path"] // ._source.payload.process.executable // "")"' <<<"${telemetry_json}" | head -n 20
+jq -r '.hits.hits[] | "- \(._source["@timestamp"] // "") | \(._source["event.type"] // "") | \(._source["event.module"] // "") | \(._source["file.path"] // ._source.process.executable // "")"' <<<"${telemetry_json}" | head -n 20
 
 echo ""
 echo "Sample security alerts from this run:"
-jq -r '.hits.hits[] | "- \(._source["@timestamp"] // "") | \(._id) | \(._source.payload["rule.id"] // "") | \(._source.payload["file.path"] // "")"' <<<"${security_json}" | head -n 20
+jq -r '.hits.hits[] | "- \(._source["@timestamp"] // "") | \(._id) | \(._source["rule.id"] // "") | \(._source["file.path"] // "")"' <<<"${security_json}" | head -n 20
 
 if [[ ! "${artifact_count}" =~ ^[0-9]+$ ]] || (( artifact_count == 0 )); then
   log "WARNING: graph has zero artifact nodes; verify file event collection is enabled"
