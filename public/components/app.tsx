@@ -1467,7 +1467,7 @@ export const XdrVisualizerApp = ({ http, notifications, data }: Props) => {
             )}
             {!loadingProcessDetails && selectedProcessDetails && (
               <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
-                <EuiText size="xs" color="subdued">event.id: {selectedProcessDetailsEventId || selectedProcessNodeId}</EuiText>
+                <EuiText size="xs" color="subdued">_id: {selectedProcessDetailsEventId || selectedProcessNodeId}</EuiText>
                 <EuiSpacer size="s" />
 
                 <EuiTabs size="s">

@@ -224,8 +224,6 @@ telemetry_body="$(cat <<EOF_TEL
               {"query_string": {"query": "${SCENARIO_DIR}"}},
               {"match_phrase": {"process.executable": "${TRIGGER_BIN}"}},
               {"match_phrase": {"process.command_line": "${SCENARIO_DIR}"}},
-              {"term": {"id.keyword": "${SOURCE_EVENT_ID}"}},
-              {"term": {"id": "${SOURCE_EVENT_ID}"}},
               {"term": {"_id": "${SOURCE_EVENT_ID}"}}
             ],
             "minimum_should_match": 1

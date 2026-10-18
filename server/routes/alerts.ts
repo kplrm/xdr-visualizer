@@ -15,6 +15,8 @@ const SECURITY_INDEX = 'xdr-agent-security';
 const TELEMETRY_INDEX = 'xdr-agent-telemetry';
 const MAX_CHAIN_ENTITIES = 40;
 const MAX_EVENT_IDS_FOR_ALERT_LINK = 120;
+// Retain hit metadata for graph links without adding fields to the document.
+const documentIds = new WeakMap<object, string>();
 
 function scopedClient(ctx: any): any | null {
   if (typeof ctx?.core?.opensearch?.client?.asInternalUser?.search === 'function') {
@@ -33,7 +35,9 @@ function scopedClient(ctx: any): any | null {
 }
 
 function normalizeSource(hit: any): any {
-  return hit?._source ?? {};
+  const source = hit?._source ?? {};
+  documentIds.set(source, safeString(hit?._id));
+  return source;
 }
 
 function hasValue(value: unknown): boolean {
@@ -104,7 +108,7 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
 }
 
 function mapAlert(source: any, fallbackId?: string): VisualizerAlertItem {
-  const id = safeString(sourceField(source, 'id'), fallbackId || 'unknown-alert');
+  const id = eventId(source, fallbackId || 'unknown-alert');
   const severity = Number(sourceField(source, 'event.severity') ?? 1);
   return {
     id,
@@ -175,7 +179,7 @@ function asBuckets(input: any): Array<{ key: string; count: number }> {
 }
 
 function eventId(source: any, fallbackId: string): string {
-  return safeString(sourceField(source, 'id'), fallbackId);
+  return safeString(documentIds.get(source), fallbackId);
 }
 
 function eventTimestamp(source: any): string | undefined {
@@ -591,7 +595,6 @@ export function registerAlertRoutes(router: any): void {
             query: {
               bool: {
                 should: [
-                  { term: { id: alertId } },
                   { term: { _id: alertId } },
                 ],
                 minimum_should_match: 1,
@@ -640,7 +643,7 @@ export function registerAlertRoutes(router: any): void {
                     { term: { 'event.module': 'telemetry.process' } },
                     ...(host ? [{ term: { 'host.hostname': host } }] : []),
                   ],
-                  should: [{ term: { id: sourceEventId } }, { term: { _id: sourceEventId } }],
+                  should: [{ term: { _id: sourceEventId } }],
                   minimum_should_match: 1,
                 },
               },
@@ -944,7 +947,7 @@ export function registerAlertRoutes(router: any): void {
             })
           : null;
 
-        const artifactHits = Array.isArray(artifactResult?.body?.hits?.hits) ? artifactResult.body.hits.hits : [];
+        const artifactHits: any[] = Array.isArray(artifactResult?.body?.hits?.hits) ? artifactResult.body.hits.hits : [];
         const artifactNodes = uniqueNodes(
           artifactHits
             .map((hit: any) => ({ source: normalizeSource(hit), fallbackId: safeString(hit?._id, '') }))
@@ -1236,7 +1239,7 @@ export function registerAlertRoutes(router: any): void {
 
         const should: any[] = [];
         if (eventId) {
-          should.push({ term: { id: eventId } }, { term: { _id: eventId } });
+          should.push({ term: { _id: eventId } });
         }
         if (processEntityId) {
           should.push(...[
@@ -1269,7 +1272,7 @@ export function registerAlertRoutes(router: any): void {
         }
 
         const body: AlertEventDetailsResponse = {
-          eventId: safeString(normalizeSource(hit)?.id, eventId || processEntityId),
+          eventId: safeString(hit._id, eventId || processEntityId),
           source: normalizeSource(hit),
         };
         return res.ok({ body });

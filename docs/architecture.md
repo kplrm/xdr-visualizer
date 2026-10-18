@@ -13,7 +13,7 @@ The plugin is intentionally split into two analysis layers.
 
 The footprint layer uses:
 
-- `source.event.id` for direct trigger linkage
+- `source.event.id`, containing the originating document `_id`, for direct trigger linkage
 - `process.entity_id` and `process.parent.entity_id` for lineage pivots
 - `file.path` for file-touch pivots
 
