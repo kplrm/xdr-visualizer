@@ -49,7 +49,6 @@ CUSTOM_HASH_ID=""
 MEMORY_RULE_ID="${MEMORY_RULE_ID:-capa-memory-dev-shm-exec}"
 
 ALERT_ID=""
-SOURCE_EVENT_ID=""
 TRIGGER_PID=""
 
 cleanup() {
@@ -177,7 +176,6 @@ EOF_ALERT_SEARCH
 
   if [[ "${hit_count}" =~ ^[0-9]+$ ]] && (( hit_count > 0 )); then
     ALERT_ID="$(jq -r '.hits.hits[0]._id' <<<"${result}")"
-    SOURCE_EVENT_ID="$(jq -r '.hits.hits[0]._source["source.event.id"] // ""' <<<"${result}")"
     break
   fi
 
@@ -223,8 +221,7 @@ telemetry_body="$(cat <<EOF_TEL
             "should": [
               {"query_string": {"query": "${SCENARIO_DIR}"}},
               {"match_phrase": {"process.executable": "${TRIGGER_BIN}"}},
-              {"match_phrase": {"process.command_line": "${SCENARIO_DIR}"}},
-              {"term": {"_id": "${SOURCE_EVENT_ID}"}}
+              {"match_phrase": {"process.command_line": "${SCENARIO_DIR}"}}
             ],
             "minimum_should_match": 1
           }
@@ -244,22 +241,6 @@ while [[ "${telemetry_hits}" =~ ^[0-9]+$ ]] && (( telemetry_hits == 0 )) && (( t
   telemetry_json="$(curl -sS -X POST "${OPENSEARCH_URL%/}/${TELEMETRY_INDEX}/_search?ignore_unavailable=true&allow_no_indices=true" -H 'Content-Type: application/json' -d "${telemetry_body}")"
   telemetry_hits="$(jq -r '.hits.hits | length' <<<"${telemetry_json}" 2>/dev/null || echo 0)"
 done
-
-if [[ "${telemetry_hits}" =~ ^[0-9]+$ ]] && (( telemetry_hits == 0 )) && [[ -n "${SOURCE_EVENT_ID}" ]]; then
-  telemetry_ids_body="$(cat <<EOF_TEL_IDS
-{
-  "size": 20,
-  "query": {
-    "ids": {
-      "values": ["${SOURCE_EVENT_ID}"]
-    }
-  }
-}
-EOF_TEL_IDS
-)"
-  telemetry_json="$(curl -sS -X POST "${OPENSEARCH_URL%/}/${TELEMETRY_INDEX}/_search?ignore_unavailable=true&allow_no_indices=true" -H 'Content-Type: application/json' -d "${telemetry_ids_body}")"
-  telemetry_hits="$(jq -r '.hits.hits | length' <<<"${telemetry_json}" 2>/dev/null || echo 0)"
-fi
 
 security_body="$(cat <<EOF_SEC
 {
@@ -289,7 +270,6 @@ echo "Temporary custom hash id: ${CUSTOM_HASH_ID}"
 echo "Rule name (hash): ${RULE_NAME}"
 echo "Memory fallback rule id: ${MEMORY_RULE_ID}"
 echo "Alert ID: ${ALERT_ID}"
-echo "Source event ID: ${SOURCE_EVENT_ID}"
 echo ""
 echo "Visualizer graph: nodes=${node_count} edges=${edge_count} process_nodes=${process_count} artifact_nodes=${artifact_count}"
 echo "Security alerts found (run-scoped): ${security_hits}"

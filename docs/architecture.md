@@ -13,9 +13,9 @@ The plugin is intentionally split into two analysis layers.
 
 The footprint layer uses:
 
-- `source.event.id`, containing the originating document `_id`, for direct trigger linkage
 - `process.entity_id` and `process.parent.entity_id` for lineage pivots
 - `file.path` for file-touch pivots
+- OpenSearch-generated `_id` metadata for selecting documents and inspecting graph nodes
 
 ## Data Sources
 
@@ -27,7 +27,6 @@ The footprint layer uses:
 The server route builds a bounded graph by combining:
 
 - Root alert document.
-- Source event id linkage (`source.event.id`).
 - Process entity and parent-entity linkage.
 - File path linkage.
 - Time-window constraints and host scoping.

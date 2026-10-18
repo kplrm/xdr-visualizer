@@ -14,7 +14,6 @@ const { schema } = require('@osd/config-schema');
 const SECURITY_INDEX = 'xdr-agent-security';
 const TELEMETRY_INDEX = 'xdr-agent-telemetry';
 const MAX_CHAIN_ENTITIES = 40;
-const MAX_EVENT_IDS_FOR_ALERT_LINK = 120;
 // Retain hit metadata for graph links without adding fields to the document.
 const documentIds = new WeakMap<object, string>();
 
@@ -613,7 +612,6 @@ export function registerAlertRoutes(router: any): void {
         const source = normalizeSource(alertHit);
 
         const host = safeString(sourceField(source, 'host.hostname'));
-        const sourceEventId = safeString(sourceField(source, 'source.event.id'));
         const processEntityId = safeString(sourceField(source, 'process.entity_id'));
         const timeFilter = { range: { '@timestamp': { gte: from || `now-${hours}h`, lte: to || 'now' } } };
         const alertTs = Date.parse(safeString(sourceField(source, '@timestamp')));
@@ -629,34 +627,8 @@ export function registerAlertRoutes(router: any): void {
           : timeFilter;
 
         let triggerTelemetrySource: any | null = null;
-        if (sourceEventId) {
-          const sourceResult = await runSearch('trigger_lookup', {
-            index: TELEMETRY_INDEX,
-            allow_no_indices: true,
-            ignore_unavailable: true,
-            body: {
-              size: 1,
-              query: {
-                bool: {
-                  filter: [
-                    timeFilter,
-                    { term: { 'event.module': 'telemetry.process' } },
-                    ...(host ? [{ term: { 'host.hostname': host } }] : []),
-                  ],
-                  should: [{ term: { _id: sourceEventId } }],
-                  minimum_should_match: 1,
-                },
-              },
-            },
-          });
-          const triggerHits = Array.isArray(sourceResult?.body?.hits?.hits) ? sourceResult.body.hits.hits : [];
-          if (triggerHits.length > 0) {
-            triggerTelemetrySource = normalizeSource(triggerHits[0]);
-          }
-        }
-
-        if (!triggerTelemetrySource && processEntityId) {
-          const fallbackResult = await runSearch('trigger_fallback', {
+        if (processEntityId) {
+          const processResult = await runSearch('process_lookup', {
             index: TELEMETRY_INDEX,
             allow_no_indices: true,
             ignore_unavailable: true,
@@ -681,9 +653,9 @@ export function registerAlertRoutes(router: any): void {
               },
             },
           });
-          const fallbackHits = Array.isArray(fallbackResult?.body?.hits?.hits) ? fallbackResult.body.hits.hits : [];
-          if (fallbackHits.length > 0) {
-            triggerTelemetrySource = normalizeSource(fallbackHits[0]);
+          const processHits = Array.isArray(processResult?.body?.hits?.hits) ? processResult.body.hits.hits : [];
+          if (processHits.length > 0) {
+            triggerTelemetrySource = normalizeSource(processHits[0]);
           }
         }
 
@@ -829,7 +801,6 @@ export function registerAlertRoutes(router: any): void {
         }
 
         const rawProcessNodes: EventGraphNode[] = [];
-        const processNodeBySourceEventId = new Map<string, EventGraphNode>();
         for (const [entity, sources] of processHitsByEntity.entries()) {
           const representative = pickRepresentativeProcessSource(sources);
           if (!representative) {
@@ -840,16 +811,9 @@ export function registerAlertRoutes(router: any): void {
             node.processEntityId = entity;
           }
           rawProcessNodes.push(node);
-          for (const sourceDoc of sources) {
-            const sourceId = eventId(sourceDoc, '');
-            if (sourceId) {
-              processNodeBySourceEventId.set(sourceId, node);
-            }
-          }
         }
 
         const processNodes = uniqueNodes(rawProcessNodes);
-        const processNodeById = new Map(processNodes.map((node) => [node.id, node]));
 
         const processNodesByEntity = new Map<string, EventGraphNode[]>();
         const processNodesByPid = new Map<number, EventGraphNode[]>();
@@ -873,9 +837,6 @@ export function registerAlertRoutes(router: any): void {
         }
 
         const processEntityIds = uniqueStrings(processNodes.map((node) => node.processEntityId)).slice(0, MAX_CHAIN_ENTITIES);
-        const processSourceEventIds = uniqueStrings(
-          [...processHitsByEntity.values()].flatMap((sources) => sources.map((sourceDoc: any) => eventId(sourceDoc, '')))
-        ).slice(0, MAX_EVENT_IDS_FOR_ALERT_LINK);
 
         const relatedAlertsResult = processEntityIds.length > 0
           ? await runSearch('related_alerts', {
@@ -896,10 +857,6 @@ export function registerAlertRoutes(router: any): void {
                       {
                         fields: ['process.parent.entity_id'],
                         values: processEntityIds,
-                      },
-                      {
-                        fields: ['source.event.id'],
-                        values: processSourceEventIds,
                       },
                     ]),
                     minimum_should_match: 1,
@@ -997,15 +954,9 @@ export function registerAlertRoutes(router: any): void {
         }
 
         for (const alertNode of alertNodes) {
-          const alertSource = alertSourcesById.get(alertNode.id);
-          const linkedBySourceEventId = safeString(sourceField(alertSource, 'source.event.id'));
           let targetNode: EventGraphNode | undefined;
 
-          if (linkedBySourceEventId) {
-            targetNode = processNodeBySourceEventId.get(linkedBySourceEventId) || processNodeById.get(linkedBySourceEventId);
-          }
-
-          if (!targetNode && alertNode.processEntityId) {
+          if (alertNode.processEntityId) {
             const candidates = processNodesByEntity.get(alertNode.processEntityId) ?? [];
             if (candidates.length > 0) {
               targetNode = pickNearestParent(candidates, alertNode);
@@ -1040,8 +991,7 @@ export function registerAlertRoutes(router: any): void {
           });
         }
 
-        const triggerProcessNode = processNodes.find((node) => node.sourceEventId === sourceEventId)
-          || processNodes.find((node) => node.processEntityId && node.processEntityId === seedEntity)
+        const triggerProcessNode = processNodes.find((node) => node.processEntityId && node.processEntityId === seedEntity)
           || processNodes[0];
 
         let ancestorLineageNodes: EventGraphNode[] = [];
@@ -1084,11 +1034,6 @@ export function registerAlertRoutes(router: any): void {
               .filter((edge) => validNodeIds.has(edge.from) && validNodeIds.has(edge.to))
           );
 
-          for (const lineNode of ancestorLineageNodes) {
-            if (lineNode.sourceEventId && triggerTelemetrySource) {
-              processNodeBySourceEventId.set(lineNode.sourceEventId, triggerProcessNode);
-            }
-          }
         }
 
         const allProcessNodes = uniqueNodes([...processNodes, ...ancestorLineageNodes]);
