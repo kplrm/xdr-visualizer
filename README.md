@@ -35,3 +35,13 @@ It consumes indexed data from:
 cd /home/kplrm/github/xdr-visualizer
 yarn build --opensearch-dashboards-version 3.9.0
 ```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development, validation, and reporting guidelines.
+
+## License
+
+Copyright (C) 2026 Diego A. Guillen-Rosaperez
+
+Licensed under the [GNU Affero General Public License, version 3 only](LICENSE) (`AGPL-3.0`). Third-party components retain their own licenses and notices.

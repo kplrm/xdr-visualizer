@@ -1,6 +1,7 @@
 {
   "name": "xdr-visualizer",
   "version": "0.1.0",
+  "license": "AGPL-3.0",
   "private": true,
   "description": "OpenSearch Dashboards plugin for XDR threat hunting and attack footprint visualization",
   "main": "index.js",
